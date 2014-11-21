@@ -1,0 +1,438 @@
+#!/usr/bin/env node
+var program = require("commander");
+var request = require("request").defaults({jar: true});
+var async = require("async");
+var pkg = require("./package.json");
+var version = pkg.version;
+var util = require("util");
+var exec = require("child_process").exec;
+var Table = require("cli-table");
+var fs = require("fs");
+
+function _parseFile(file) {
+	var data = JSON.parse(file.toString());
+	if(data.email && data.uri && data.password) {
+		return data;
+	}
+	else {
+		return false;
+	}
+}
+
+function _readConfigFile(filePath, callback) {
+	var userHome = process.env.HOME || process.env.HOMEPATH || process.env.USERPROFILE;
+	// if a path is provided, look for the file in the path provided
+	if(typeof filePath === "string") {
+		var file;
+		fs.readFile(filePath, function(err, data) {
+			if(err) {
+				fs.readFile("~/.dbman", function(err, data) {
+					if(err) throw err;
+
+					// if the file is there, parse it and check that all values are there or return an error
+					if(data) {
+						var file = _parseFile(data);
+						return callback(null, file);
+					}
+				})
+			}
+
+			// if the file is there, parse it and check that all values are there or return an error
+			if(data) {
+				var file = _parseFile(data);
+				return callback(null, file);
+			}
+		})
+	}
+
+	// if is not there, then try to load the file from looking at ~/.dbman
+	else {
+		fs.readFile(userHome + "/.dbman", function(err, data) {
+			if(err) {
+				console.log(err);
+				process.exit(1);
+			}
+
+			// if the file is there, parse it and check that all values are there or return an error
+			if(data) {
+				var file = _parseFile(data);
+				return callback(null, file);
+			}
+		})
+	}
+}
+
+program
+	.version(version);
+
+program
+	.command("backupall [c]")
+	.description("Create a backup")
+	.option("-c, --config", "Config")
+	.action(function(uri, username, password, options) {
+		_readConfigFile(config, function(err, file) {
+			if(file) {
+				return backupAll(file.uri, file.email, file.password, options);
+			}
+			else {
+				return process.exit(1);
+			}
+		})
+	});
+
+program
+	.command("backup <database> [d]")
+	.description("Create a backup")
+	.option("--database", "Database id")	
+	.option("-d, --destination-path", "Download the backup once it finishes to the destination path provided")
+	.option("-c, --config", "Config")
+	.action(function(database, destinationpath, config, options) {
+		_readConfigFile(config, function(err, file) {
+			if(file) {
+				return backup(file.uri, file.email, file.password, database, destinationpath, options);
+			}
+			else {
+				return process.exit(1);
+			}
+		})
+	});
+
+program
+	.command("list [c]")
+	.description("List all databases")
+	.option("-c, --config", "Config file to load")
+	.action(function(config, options) {
+		_readConfigFile(config, function(err, file) {
+			if(file) {
+				return listDatabases(file.uri, file.email, file.password, options);
+			}
+			else {
+				return process.exit(1);
+			}
+		})
+		
+	});
+
+program
+	.command("test [c]")
+	.description("Test connection")
+	.option("-c, --config", "Config file to load")
+	.action(function(config, options) {
+		_readConfigFile(config, function(err, file) {
+			if(file) {
+				return testConnection(file.uri, file.email, file.password, options);
+			}
+			else {
+				return process.exit(1);
+			}
+		})
+	});
+
+program.parse(process.argv);
+
+/**
+ * Login to the host provided
+ * @param  {string}   host     The host to connect to
+ * @param  {string}   username The username to use on authentication
+ * @param  {string}   password The password to use on authentication
+ * @param  {Function} callback Callback to execute on completion
+ * @return {Function}            The callback set in callback
+ */
+function _login(host, email, password, callback) {
+	var uri = host + "/api/login";
+	var user = {
+		username: email,
+		password: password
+	}
+
+	request.post({uri: uri, json: user}, function(error, response, body) {
+		if(response.statusCode == 200) {
+			return callback(false, body);
+		}
+		else {
+			return callback(true, null);
+		}
+	});
+}
+
+/**
+ * Get all databases
+ * @param  {string}   host     The host to communicate to
+ * @param  {Function} callback The callback to return on completion
+ * @return {Function}            The callback set in callback
+ */
+function _getDatabases(host, callback) {
+	var uri = host + "/api/databases";
+
+	request
+		.get(uri, function(error, res, body) {
+			if(res.statusCode == 200) {
+				return callback(false, JSON.parse(body));
+			}
+			else {
+				return callback(true, null);
+			}
+		});		
+}
+
+/**
+ * Get a specific database
+ * @param  {string}   host     The host to communicate to
+ * @param  {string}   id       The id of the database to get
+ * @param  {Function} callback The callback to execute on completion
+ * @return {Function}            The callback set in callback
+ */
+function _getDatabase(host, id, callback) {
+	var uri = host + "/api/databases/" + id;
+	request.get(uri, function(error, res, body) {
+		if(res.statusCode == 200) {
+			return callback(false, JSON.parse(body));
+		}
+		else {
+			console.log("     The server responded with a status " + res.statusCode);
+			return callback(true, null);
+		}
+	});
+}
+
+/**
+ * Performs a backup by making a POST request to the website
+ * @param  {string}   host     The host to connect to 
+ * @param  {object}   database The database object
+ * @param  {Function} callback Callback to execute on completion
+ * @return {Function}            The callback set in callback
+ */
+function _performBackup(host, database, callback) {
+	console.log("     Performing backup for database %s", database.database_name);
+	var uri = host + "/api/databases/" + database._id + "/backups";
+
+	var date = new Date();
+	// create a string with the current time
+	var now = date.getMonth() + "-" + date.getDay() + "-" + date.getFullYear() + "_" + date.getHours() + ":" + date.getUTCMinutes();
+	
+	// options to send, the filename will be the combination of the database name plus the current time
+	var data = {
+		name: database.database_name + "-" + now,
+		format: "sql.gz"
+	}
+
+	request
+		.post({uri: uri, json: data}, function(err, res, body) {
+			if(res.statusCode == 201) {
+				return callback(false, body);
+			}
+			else {
+				return callback(true, null);
+			}
+		});
+}
+
+function _getBackup(host, databaseid, backupid, callback) {
+	var uri = host + "/api/databases/" + databaseid + "/backups/" + backupid;
+	request.get(uri, function(err, res, body) {
+		if(res.statusCode == 200) {
+			return callback(false, JSON.parse(body));
+		}
+		else {
+			console.log("     The server responded with a status " + res.statusCode);
+			return callback(true, null);
+		}
+	});
+}
+
+/**
+ * Backup one database
+ * @param  {string} host            The host to connect to
+ * @param  {string} email        		The email to use to authenticate
+ * @param  {string} password        The password to use to authenticate
+ * @param  {string} databaseId      The database id to backup
+ * @param  {string} destinationpath If provided, it will download the backup file to the destination provided
+ * @param  {object} options         Object with options passed by commander
+ * @return {void}                 
+ */
+function backup(host, email, password, databaseId, destinationpath, options) {
+	console.log();
+	_login(host, email, password, function(err, user) {
+		if(err) {
+			console.log("     There was an error with the email and the password you provied");
+			console.log(err);
+			process.exit(1);
+		}
+		if(user) {
+			console.log("     Starting backup now of database " + databaseId);
+			_getDatabase(host, databaseId, function(err, database) {
+				if(err) {
+					console.log("     There was a problem");
+					return process.exit(1);
+				}
+				if(database) {
+					_performBackup(host, database, function(err, backup) {
+						console.log();
+						console.log("     Finished backup for database " + database.database_name + " with filename " + backup.fileName);
+						
+						if(destinationpath) {
+							console.log();
+							console.log("     Waiting for the backup to finish before we start downloading it");
+							console.log("     Please wait, this can take a few minutes depending on the size of the backup");
+							console.log("     Once the backup finishes the download will start automatically");
+
+							var backupStatus = "created";
+							var counter = 0;
+							async.until(
+								function() {
+									if(backupStatus == "finished") {
+										console.log("     Starting download");
+										return true;
+									}
+									if(backupStatus == "error") {
+										return true;
+									}
+
+									return false;
+								}, 
+								function(callback) {
+									console.log();
+									console.log("     Waiting...");
+									
+									setTimeout(function() {
+										_getBackup(host, database._id, backup._id, function(err, result) {
+											counter++;
+											console.log("     Status of backup is: " + result.status);
+											console.log("     Trying again in 10 seconds");
+											console.log();
+											if(err) {
+												backupStatus = "error";
+											}
+
+											backupStatus = result.status;
+											// end after 20 tries
+											if(counter == 20) {
+												backupStatus = "error";
+											}
+											callback();
+										});
+									}, 10000);
+
+								}, 
+								function(err) {
+									console.log();
+
+									if(backupStatus == "finished") {
+										exec("wget " + host + backup.url + " -P " + destinationpath, function(err, stdout, stderr) {
+											if(stdout) console.log(stdout);
+											if(stderr) console.log(stderr);
+											if(err) console.log(err);
+
+											process.exit();
+										});
+									}
+									if(backupStatus == "error") {
+										console.log("     There was an error creating the backup");
+										return process.exit(1);
+									}
+								}
+							);
+						}
+						else {
+							console.log();
+							return process.exit();
+						}
+					});
+				}
+			})
+
+		}
+	});
+}
+
+function listDatabases(host, email, password, options) {
+	_login(host, email, password, function(err, user) {
+		console.log();
+		if(err) {
+			console.log("     There was an error with the email and the password you provided");
+			console.log(err);
+			process.exit(1);
+		}
+		if(user) {
+			_getDatabases(host, function(err, results) {
+				var table = new Table({
+					head: ["Database name", "Database Id", "Server", "IP"],
+					colWidths: [40, 28, 12, 15]
+				});
+
+				results.forEach(function(database) {
+					table.push([database.database_name, database._id, database.server.name, database.server.ip]);
+				});
+
+				console.log(table.toString());
+				process.exit();
+			});
+		}
+	});
+}
+
+/**
+ * Backup all databases
+ * @param  {string} uri      URI of dbman
+ * @param  {string} email 	Email to use to authenticate
+ * @param  {string} password Password to use to authenticate
+ * @param  {object} options  Object with options passed from commander
+ * @return {void}          
+ */
+function backupAll(host, email, password, options) {
+	_login(host, email, password, function(err, user) {
+			console.log();
+		if(err) {
+			console.log("     There was an error with the email and the password you provied");
+			console.log(err);
+			process.exit(1);
+		}
+		if(user) {
+			console.log("     Starting backup all now");
+			_getDatabases(host, function(err, results) {
+				var counter = 0;
+				var total = results.length;
+
+				// Loop through all databases
+				results.forEach(function(result) {
+					process.nextTick(function() {
+						// Perform the backup by calling the function _performBackup
+						_performBackup(host, result, function(err, results) {
+							console.log("     Finished backup for database " + result.database_name + " with filename " + results.fileName);
+							counter++;
+							if(counter == total) {
+								console.log();
+								console.log("     Finished backing up all databases");
+								console.log();
+								process.exit();
+							}
+						});
+					});
+				})
+			});
+		}
+	});
+}
+
+function testConnection(host, email, password, options) {
+	var uri = host + "/api/login";
+	var user = {
+		username: email,
+		password: password
+	}
+
+	request.post({uri: uri, json: user}, function(error, response, body) {
+		request.get({uri: host + "/api/session"}, function(e, r, result) {
+			if(r.statusCode == 200) {
+				var user = JSON.parse(result);
+				console.log("     Successfully connected to %s", host);
+				console.log("     Using user: %s", user.fullName);
+				process.exit();
+			}
+			else {
+				console.log("     There was an error, got status: " + r.statusCode);
+				process.exit(1);
+			}
+		})
+	});
+}

@@ -1,0 +1,23 @@
+{
+  "name": "dbmancli",
+  "description": "CLI to interact with dbman",
+  "version": "0.1.0",
+  "author": "Luis Elizondo <lelizondo@gmail.com>",
+  "dependencies": {
+    "async": "~0.9.0",
+    "commander": "~2.5.0",
+    "request": "~2.48.0",
+    "cli-table": "~0.2.0"
+  },
+  "keywords": [
+    "dbman"
+  ],
+  "repository": "git://github.com/luiselizondo/dbman-cli",
+  "engines": {
+    "node": ">= 0.10.22"
+  },
+  "bin": {
+    "dbman": "./dbmancli"
+  },
+  "license": "MIT"
+}
