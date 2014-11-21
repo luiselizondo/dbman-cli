@@ -1,7 +1,7 @@
 {
   "name": "dbmancli",
   "description": "CLI to interact with dbman",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": "Luis Elizondo <lelizondo@gmail.com>",
   "dependencies": {
     "async": "~0.9.0",

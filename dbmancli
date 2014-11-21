@@ -69,7 +69,7 @@ program
 	.command("backupall [c]")
 	.description("Create a backup")
 	.option("-c, --config", "Config")
-	.action(function(uri, username, password, options) {
+	.action(function(config, options) {
 		_readConfigFile(config, function(err, file) {
 			if(file) {
 				return backupAll(file.uri, file.email, file.password, options);
