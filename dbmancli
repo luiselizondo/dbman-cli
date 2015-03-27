@@ -390,25 +390,28 @@ function backupAll(host, email, password, options) {
 		if(user) {
 			console.log("     Starting backup all now");
 			_getDatabases(host, function(err, results) {
-				var counter = 0;
-				var total = results.length;
-
-				// Loop through all databases
-				results.forEach(function(result) {
-					process.nextTick(function() {
-						// Perform the backup by calling the function _performBackup
+				function backupAndWait(result, next) {
+					console.log("Starting to backup database " + result.database_name);
+					setTimeout(function() {
 						_performBackup(host, result, function(err, results) {
 							console.log("     Finished backup for database " + result.database_name + " with filename " + results.fileName);
-							counter++;
-							if(counter == total) {
-								console.log();
-								console.log("     Finished backing up all databases");
-								console.log();
-								process.exit();
-							}
+							next();
 						});
-					});
-				})
+					}, 60000);
+				}
+
+				async.eachSeries(
+					results, 
+					function(result, next) {
+						backupAndWait(result, next);
+					},
+					function(err) {
+						console.log();
+						console.log("     Finished backing up all databases");
+						console.log();
+						process.exit();
+					}
+				);
 			});
 		}
 	});
